@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⑤ 設定</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<a class="back" href="index.html">← メニューに戻る</a>
+<h1>⑤ 設定</h1>
+
+<label>最大注文番号(1〜n)
+  <input type="number" id="maxOrderNumber" min="1" max="200">
+</label>
+<label>新規注文とみなす時間(分) ー ②輸送ページで赤表示する時間
+  <input type="number" id="newOrderThresholdMin" min="1" step="0.5">
+</label>
+<label>催促バナーの表示時間(秒)
+  <input type="number" id="reminderDisplaySec" min="5">
+</label>
+
+<button class="btn" id="save-btn">保存</button>
+<p class="muted" id="save-msg" style="display:none;color:#3d8f5c;">保存しました</p>
+<p class="muted">※ 最大注文番号を稼働中に減らすと、進行中の注文と番号が重複する可能性があります。減らす場合は受付を一時停止し、注文を捌き切ってから変更してください。</p>
+
+<script type="module">
+import { getApp_, getDb, watchSettings, saveSettings } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+
+const app = getApp_();
+const db = getDb();
+requireAuth(app);
+
+watchSettings(db, (s) => {
+  document.getElementById("maxOrderNumber").value = s.maxOrderNumber;
+  document.getElementById("newOrderThresholdMin").value = s.newOrderThresholdMin;
+  document.getElementById("reminderDisplaySec").value = s.reminderDisplaySec;
+});
+
+document.getElementById("save-btn").onclick = async () => {
+  await saveSettings(db, {
+    maxOrderNumber: Number(document.getElementById("maxOrderNumber").value),
+    newOrderThresholdMin: Number(document.getElementById("newOrderThresholdMin").value),
+    reminderDisplaySec: Number(document.getElementById("reminderDisplaySec").value),
+  });
+  const msg = document.getElementById("save-msg");
+  msg.style.display = "block";
+  setTimeout(() => { msg.style.display = "none"; }, 2000);
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>② 輸送</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<a class="back" href="index.html">← メニューに戻る</a>
+<h1>② 輸送</h1>
+
+<div class="banner" id="reminder-banner" style="display:none;">急げ</div>
+
+<div id="list"></div>
+<p class="muted" id="empty-msg" style="display:none;">現在、注文はありません</p>
+
+<script type="module">
+import { getApp_, getDb, watchActiveOrders, watchSettings, watchReminder } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+
+const app = getApp_();
+const db = getDb();
+requireAuth(app);
+
+let orders = [];
+let settings = { newOrderThresholdMin: 2, reminderDisplaySec: 30 };
+let reminderAt = null;
+
+watchSettings(db, (s) => { settings = s; render(); });
+watchActiveOrders(db, (list) => { orders = list; render(); });
+watchReminder(db, (r) => {
+  reminderAt = r && r.triggeredAt ? r.triggeredAt.toMillis() : null;
+  render();
+});
+
+function render() {
+  const listEl = document.getElementById("list");
+  const now = Date.now();
+  const thresholdMs = (settings.newOrderThresholdMin || 2) * 60 * 1000;
+
+  if (orders.length === 0) {
+    listEl.innerHTML = "";
+    document.getElementById("empty-msg").style.display = "block";
+  } else {
+    document.getElementById("empty-msg").style.display = "none";
+    // 新しい注文ほど上に来るように並び替え(pending write中=createdAtがnullのものを最優先)
+    const sorted = orders.slice().sort((a, b) => {
+      const at = a.createdAt ? a.createdAt.toMillis() : Infinity;
+      const bt = b.createdAt ? b.createdAt.toMillis() : Infinity;
+      return bt - at;
+    });
+    listEl.innerHTML = sorted.map((o) => {
+      const createdMs = o.createdAt ? o.createdAt.toMillis() : now; // pending write中はnull → 新規扱い
+      const isNew = (now - createdMs) < thresholdMs;
+      const total = (o.normal || 0) + (o.spicy || 0);
+      const timeStr = o.createdAt ? new Date(createdMs).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : "受付中...";
+      return `<div class="card ${isNew ? "new" : ""}">
+        <b>No.${o.queueNumber}</b> ー ${total}個 ー <span class="muted">${timeStr}</span>
+      </div>`;
+    }).join("");
+  }
+
+  // 催促バナー
+  if (reminderAt && (now - reminderAt) < (settings.reminderDisplaySec || 30) * 1000) {
+    document.getElementById("reminder-banner").style.display = "block";
+  } else {
+    document.getElementById("reminder-banner").style.display = "none";
+  }
+}
+
+// 新規→通常の色替え、催促バナーの自動非表示のため定期的に再描画
+setInterval(render, 1000);
+</script>
+</body>
+</html>

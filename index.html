@@ -1,0 +1,39 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>食販システム</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<h1>食販システム</h1>
+<div id="menu" style="display:none;">
+  <button class="btn" onclick="location.href='uketsuke.html'">① 受付</button>
+  <button class="btn" onclick="location.href='yuso.html'">② 輸送</button>
+  <button class="btn" onclick="location.href='watashi.html'">③ 受け渡し</button>
+  <button class="btn" onclick="location.href='admin.html'">④ admin</button>
+  <button class="btn" onclick="location.href='settings.html'">⑤ 設定</button>
+  <button class="btn" onclick="location.href='saisoku.html'">⑥ 催促</button>
+  <button class="btn" onclick="location.href='torikeshi.html'">⑦ 注文削除</button>
+  <p class="muted" id="whoami"></p>
+  <button class="btn-sm" id="signout-btn">サインアウト</button>
+</div>
+
+<script type="module">
+import { getApp_ } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+import { getAuth, signOut } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
+
+const app = getApp_();
+const auth = requireAuth(app, {
+  onReady: (user) => {
+    document.getElementById("menu").style.display = "block";
+    document.getElementById("whoami").textContent = user.email;
+  }
+});
+
+document.getElementById("signout-btn").onclick = () => signOut(getAuth(app));
+</script>
+</body>
+</html>

@@ -1,0 +1,83 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⑦ 注文削除</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<a class="back" href="index.html">← メニューに戻る</a>
+<h1>⑦ 注文削除</h1>
+<p class="muted">取り消したい注文の「取消」ボタンを押してください。</p>
+
+<div id="list"></div>
+<p class="muted" id="empty-msg" style="display:none;">現在、注文はありません</p>
+
+<!-- 取消確認モーダル -->
+<div class="overlay" id="confirm-modal" style="display:none;">
+  <h2>この注文を取り消しますか?</h2>
+  <p style="font-size:1.4rem;" id="confirm-detail"></p>
+  <p class="error">この操作は取り消せません</p>
+  <button class="btn btn-danger" id="confirm-yes-btn">取り消す</button>
+  <button class="btn-sm" id="confirm-no-btn">戻る</button>
+</div>
+
+<script type="module">
+import { getApp_, getDb, watchActiveOrders, cancelOrder } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+
+const app = getApp_();
+const db = getDb();
+requireAuth(app);
+
+let target = null; // {id, queueNumber, normal, spicy, historyDocId}
+
+watchActiveOrders(db, (orders) => {
+  const listEl = document.getElementById("list");
+  if (orders.length === 0) {
+    listEl.innerHTML = "";
+    document.getElementById("empty-msg").style.display = "block";
+    return;
+  }
+  document.getElementById("empty-msg").style.display = "none";
+  listEl.innerHTML = orders.map((o) => `
+    <div class="card">
+      <b>No.${o.queueNumber}</b> ー 普通 ${o.normal || 0}個 / 辛味 ${o.spicy || 0}個
+      <button class="btn-sm btn-danger-outline" data-id="${o.id}" style="float:right;">取消</button>
+    </div>
+  `).join("");
+
+  listEl.querySelectorAll("button[data-id]").forEach((btn) => {
+    btn.onclick = () => {
+      const o = orders.find((x) => x.id === btn.dataset.id);
+      target = o;
+      document.getElementById("confirm-detail").textContent =
+        `No.${o.queueNumber} ー 普通 ${o.normal || 0}個 / 辛味 ${o.spicy || 0}個`;
+      document.getElementById("confirm-modal").style.display = "flex";
+    };
+  });
+});
+
+document.getElementById("confirm-no-btn").onclick = () => {
+  target = null;
+  document.getElementById("confirm-modal").style.display = "none";
+};
+
+document.getElementById("confirm-yes-btn").onclick = async () => {
+  if (!target) return;
+  const btn = document.getElementById("confirm-yes-btn");
+  btn.disabled = true;
+  try {
+    await cancelOrder(db, target.id, target.queueNumber, target.historyDocId);
+    document.getElementById("confirm-modal").style.display = "none";
+  } catch (e) {
+    alert("エラー: " + e.message);
+  } finally {
+    btn.disabled = false;
+    target = null;
+  }
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>① 受付</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<a class="back" href="index.html">← メニューに戻る</a>
+<h1>① 受付</h1>
+
+<div id="app" style="display:none;">
+  <div class="qty-row">
+    <span style="width:70px;">普通</span>
+    <button id="normal-minus">−</button>
+    <span class="num" id="normal-num">0</span>
+    <button id="normal-plus">+</button>
+  </div>
+  <div class="qty-row">
+    <span style="width:70px;">辛味</span>
+    <button id="spicy-minus">−</button>
+    <span class="num" id="spicy-num">0</span>
+    <button id="spicy-plus">+</button>
+  </div>
+
+  <button class="btn" id="submit-btn" disabled>送信</button>
+  <p class="error" id="err"></p>
+</div>
+
+<!-- 再確認モーダル -->
+<div class="overlay" id="confirm-modal" style="display:none;">
+  <h2>この内容で送信しますか?</h2>
+  <p id="confirm-detail" style="font-size:1.3rem;"></p>
+  <button class="btn" id="confirm-yes-btn">確認して送信</button>
+  <button class="btn-sm" id="confirm-no-btn">戻る</button>
+</div>
+
+<!-- 完了表示 -->
+<div class="overlay" id="done-modal" style="display:none;">
+  <h2>注文番号</h2>
+  <p style="font-size:4rem;font-weight:bold;" id="done-number"></p>
+  <button class="btn" id="done-ok-btn">次の注文へ</button>
+</div>
+
+<script type="module">
+import { getApp_, getDb, watchSettings, createOrder, PRICE_PER_MEAL } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+
+const app = getApp_();
+const db = getDb();
+let settings = null;
+let normal = 0, spicy = 0;
+
+watchSettings(db, (s) => { settings = s; });
+
+requireAuth(app, { onReady: () => { document.getElementById("app").style.display = "block"; } });
+
+function render() {
+  document.getElementById("normal-num").textContent = normal;
+  document.getElementById("spicy-num").textContent = spicy;
+  document.getElementById("submit-btn").disabled = (normal + spicy) === 0;
+}
+document.getElementById("normal-plus").onclick = () => { normal++; render(); };
+document.getElementById("normal-minus").onclick = () => { normal = Math.max(0, normal - 1); render(); };
+document.getElementById("spicy-plus").onclick = () => { spicy++; render(); };
+document.getElementById("spicy-minus").onclick = () => { spicy = Math.max(0, spicy - 1); render(); };
+render();
+
+document.getElementById("submit-btn").onclick = () => {
+  const total = (normal + spicy) * PRICE_PER_MEAL;
+  document.getElementById("confirm-detail").innerHTML =
+    `普通 ${normal}個 / 辛味 ${spicy}個<br><span style="font-size:1.6rem;">${total.toLocaleString()}円</span>`;
+  document.getElementById("confirm-modal").style.display = "flex";
+};
+document.getElementById("confirm-no-btn").onclick = () => {
+  document.getElementById("confirm-modal").style.display = "none";
+};
+document.getElementById("confirm-yes-btn").onclick = async () => {
+  const btn = document.getElementById("confirm-yes-btn");
+  btn.disabled = true;
+  document.getElementById("err").textContent = "";
+  try {
+    const maxOrderNumber = settings ? settings.maxOrderNumber : 30;
+    const num = await createOrder(db, { normal, spicy }, maxOrderNumber);
+    document.getElementById("confirm-modal").style.display = "none";
+    document.getElementById("done-number").textContent = num;
+    document.getElementById("done-modal").style.display = "flex";
+  } catch (e) {
+    document.getElementById("confirm-modal").style.display = "none";
+    document.getElementById("err").textContent = e.message;
+  } finally {
+    btn.disabled = false;
+  }
+};
+document.getElementById("done-ok-btn").onclick = () => {
+  normal = 0; spicy = 0; render();
+  document.getElementById("done-modal").style.display = "none";
+};
+</script>
+</body>
+</html>

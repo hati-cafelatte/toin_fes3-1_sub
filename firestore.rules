@@ -1,0 +1,27 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function isAllowedDomain() {
+      return request.auth != null
+        && request.auth.token.email != null
+        && request.auth.token.email.matches('.*@sgh-tsukuba[.]org$');
+    }
+
+    // meta/settings, meta/reminder, meta/queueState, meta/counters
+    match /meta/{doc} {
+      allow read: if isAllowedDomain();
+      allow write: if isAllowedDomain();
+    }
+
+    match /activeOrders/{orderId} {
+      allow read: if isAllowedDomain();
+      allow write: if isAllowedDomain();
+    }
+
+    match /orderHistory/{historyId} {
+      allow read: if isAllowedDomain();
+      allow write: if isAllowedDomain();
+    }
+  }
+}

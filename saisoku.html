@@ -1,0 +1,36 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>⑥ 催促</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<a class="back" href="index.html">← メニューに戻る</a>
+<h1>⑥ 催促</h1>
+<p class="muted">押すと②輸送ページに催促が行きます</p>
+<button class="btn btn-danger" id="send-btn">催促する</button>
+<p id="sent-msg" style="display:none;color:#3d8f5c;font-weight:bold;">送信しました!</p>
+
+<script type="module">
+import { getApp_, getDb, sendReminder } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+
+const app = getApp_();
+const db = getDb();
+requireAuth(app);
+
+document.getElementById("send-btn").onclick = async () => {
+  const btn = document.getElementById("send-btn");
+  btn.disabled = true;
+  await sendReminder(db);
+  document.getElementById("sent-msg").style.display = "block";
+  setTimeout(() => {
+    document.getElementById("sent-msg").style.display = "none";
+    btn.disabled = false;
+  }, 3000);
+};
+</script>
+</body>
+</html>

@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>④ admin</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<a class="back" href="index.html">← メニューに戻る</a>
+<h1>④ admin</h1>
+
+<!-- パスワードゲート(Googleドメイン認証の後に表示) -->
+<div class="overlay" id="pw-gate" style="display:none;">
+  <h2>パスワードを入力</h2>
+  <input type="password" id="pw-input" placeholder="パスワード" style="font-size:1.2rem;padding:10px;">
+  <button class="btn" id="pw-submit" style="width:auto;padding:12px 24px;">入る</button>
+  <p class="error" id="pw-err"></p>
+</div>
+
+<div id="admin-app" style="display:none;">
+  <div class="card" id="revenue-summary" style="font-size:1.2rem;"></div>
+
+  <h2>今日の注文履歴</h2>
+  <table>
+    <thead><tr><th>#</th><th>時刻</th><th>普通</th><th>辛味</th><th>金額</th><th>状態</th></tr></thead>
+    <tbody id="history-body"></tbody>
+  </table>
+  <div id="pager"></div>
+
+  <hr style="margin:24px 0;">
+  <h2>リセット</h2>
+  <p class="muted">今日のリストをCSVでエクスポートしてから、全データをクリアします。本番開始前・翌日への切り替え前に実行してください。</p>
+  <button class="btn btn-danger" id="reset-btn">CSVエクスポート → リセット</button>
+</div>
+
+<script type="module">
+import { getApp_, getDb, getHistoryOnce, resetAll, PRICE_PER_MEAL } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+import { checkAdminPassword } from "./AdminAuth.js";
+
+const app = getApp_();
+const db = getDb();
+
+let history = [];
+let page = 0;
+const PAGE_SIZE = 20;
+
+requireAuth(app, {
+  onReady: () => {
+    document.getElementById("pw-gate").style.display = "flex";
+  }
+});
+
+document.getElementById("pw-submit").onclick = checkPassword;
+document.getElementById("pw-input").addEventListener("keydown", (e) => {
+  if (e.key === "Enter") checkPassword();
+});
+
+async function checkPassword() {
+  const input = document.getElementById("pw-input").value;
+  const ok = await checkAdminPassword(input);
+  if (ok) {
+    document.getElementById("pw-gate").style.display = "none";
+    document.getElementById("admin-app").style.display = "block";
+    await loadHistory();
+  } else {
+    document.getElementById("pw-err").textContent = "パスワードが違います";
+  }
+}
+
+async function loadHistory() {
+  history = await getHistoryOnce(db);
+  page = 0;
+  renderSummary();
+  renderPage();
+}
+
+function itemCount(h) {
+  return (h.normal || 0) + (h.spicy || 0);
+}
+
+function renderSummary() {
+  // canceled: true の注文は売上から除外する(取消による変動を反映)
+  const validOrders = history.filter((h) => !h.canceled);
+  const canceledOrders = history.filter((h) => h.canceled);
+  const totalItems = validOrders.reduce((sum, h) => sum + itemCount(h), 0);
+  const revenue = totalItems * PRICE_PER_MEAL;
+  const canceledCount = canceledOrders.length;
+
+  document.getElementById("revenue-summary").innerHTML = `
+    <div><b>売上合計: ${revenue.toLocaleString()}円</b>(${totalItems}食 / 有効注文${validOrders.length}件)</div>
+    <div class="muted">取消: ${canceledCount}件 (売上には含まれません)</div>
+  `;
+}
+
+function renderPage() {
+  const start = page * PAGE_SIZE;
+  const rows = history.slice(start, start + PAGE_SIZE);
+  document.getElementById("history-body").innerHTML = rows.map((h) => {
+    const t = h.createdAt ? new Date(h.createdAt.toMillis()).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : "-";
+    const price = itemCount(h) * PRICE_PER_MEAL;
+    const statusHtml = h.canceled
+      ? `<span class="error">取消</span>`
+      : `<span class="muted">有効</span>`;
+    const rowStyle = h.canceled ? ` style="text-decoration:line-through;color:#999;"` : "";
+    return `<tr${rowStyle}><td>${h.historyId}</td><td>${t}</td><td>${h.normal || 0}</td><td>${h.spicy || 0}</td><td>${price.toLocaleString()}円</td><td>${statusHtml}</td></tr>`;
+  }).join("");
+
+  const totalPages = Math.max(1, Math.ceil(history.length / PAGE_SIZE));
+  const pager = document.getElementById("pager");
+  pager.innerHTML = "";
+  const prevBtn = document.createElement("button");
+  prevBtn.className = "btn-sm";
+  prevBtn.textContent = "前へ";
+  prevBtn.disabled = page === 0;
+  prevBtn.onclick = () => { page--; renderPage(); };
+
+  const label = document.createElement("span");
+  label.className = "muted";
+  label.textContent = ` ${page + 1} / ${totalPages} ページ (計${history.length}件) `;
+
+  const nextBtn = document.createElement("button");
+  nextBtn.className = "btn-sm";
+  nextBtn.textContent = "次へ";
+  nextBtn.disabled = page >= totalPages - 1;
+  nextBtn.onclick = () => { page++; renderPage(); };
+
+  pager.append(prevBtn, label, nextBtn);
+}
+
+function toCsv(list) {
+  const header = "historyId,queueNumber,normal,spicy,price,canceled,createdAt\n";
+  const rows = list.map((h) => {
+    const t = h.createdAt ? new Date(h.createdAt.toMillis()).toISOString() : "";
+    const price = h.canceled ? 0 : itemCount(h) * PRICE_PER_MEAL;
+    return [h.historyId, h.queueNumber, h.normal || 0, h.spicy || 0, price, h.canceled ? "canceled" : "", t].join(",");
+  });
+  const validOrders = list.filter((h) => !h.canceled);
+  const totalRevenue = validOrders.reduce((sum, h) => sum + itemCount(h) * PRICE_PER_MEAL, 0);
+  const footer = `\n合計売上,,,,${totalRevenue},,`;
+  return header + rows.join("\n") + footer;
+}
+
+document.getElementById("reset-btn").onclick = async () => {
+  if (!confirm("本当にリセットしますか?この操作は取り消せません。")) return;
+  const btn = document.getElementById("reset-btn");
+  btn.disabled = true;
+  btn.textContent = "処理中...";
+  try {
+    const exported = await resetAll(db);
+    const csv = toCsv(exported.sort((a, b) => a.historyId - b.historyId));
+    const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const dateStr = new Date().toISOString().slice(0, 10);
+    a.href = url;
+    a.download = `order-history-${dateStr}.csv`;
+    a.click();
+    URL.revokeObjectURL(url);
+    await loadHistory();
+    alert("CSVを出力し、データをリセットしました。");
+  } catch (e) {
+    alert("エラー: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "CSVエクスポート → リセット";
+  }
+};
+</script>
+</body>
+</html>

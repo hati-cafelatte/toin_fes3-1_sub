@@ -1,0 +1,56 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>③ 受け渡し</title>
+<link rel="stylesheet" href="Style.css">
+</head>
+<body>
+<a class="back" href="index.html">← メニューに戻る</a>
+<h1>③ 受け渡し</h1>
+
+<div id="list"></div>
+<p class="muted" id="empty-msg" style="display:none;">現在、注文はありません</p>
+
+<script type="module">
+import { getApp_, getDb, watchActiveOrders, completeOrder } from "./Db.js";
+import { requireAuth } from "./Auth.js";
+
+const app = getApp_();
+const db = getDb();
+requireAuth(app);
+
+watchActiveOrders(db, (orders) => {
+  const listEl = document.getElementById("list");
+  if (orders.length === 0) {
+    listEl.innerHTML = "";
+    document.getElementById("empty-msg").style.display = "block";
+    return;
+  }
+  document.getElementById("empty-msg").style.display = "none";
+  listEl.innerHTML = orders.map((o) => `
+    <div class="card">
+      <b>No.${o.queueNumber}</b><br>
+      普通 ${o.normal || 0}個 / 辛味 ${o.spicy || 0}個
+      <button class="btn-sm" data-id="${o.id}" data-num="${o.queueNumber}" style="float:right;">完了</button>
+    </div>
+  `).join("");
+
+  listEl.querySelectorAll("button[data-id]").forEach((btn) => {
+    btn.onclick = async () => {
+      btn.disabled = true;
+      btn.textContent = "処理中...";
+      try {
+        await completeOrder(db, btn.dataset.id, Number(btn.dataset.num));
+      } catch (e) {
+        alert("エラー: " + e.message);
+        btn.disabled = false;
+        btn.textContent = "完了";
+      }
+    };
+  });
+});
+</script>
+</body>
+</html>
