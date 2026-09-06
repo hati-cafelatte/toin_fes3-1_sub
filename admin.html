@@ -14,35 +14,71 @@
 <div class="overlay" id="pw-gate" style="display:none;">
   <h2>パスワードを入力</h2>
   <input type="password" id="pw-input" placeholder="パスワード" style="font-size:1.2rem;padding:10px;">
+
+  <div class="muted" style="margin:10px 0;">表示するデータ(全件取得を避けるため、必ず1つだけ選択)</div>
+  <div id="pw-load-mode">
+    <label><input type="checkbox" class="load-mode-cb" data-mode="none" id="pw-load-none"> load_none</label>
+    <label><input type="checkbox" class="load-mode-cb" data-mode="today" id="pw-load-today"> load_today</label>
+    <label><input type="checkbox" class="load-mode-cb" data-mode="yesterday" id="pw-load-yesterday"> load_yesterday</label>
+  </div>
+
   <button class="btn" id="pw-submit" style="width:auto;padding:12px 24px;">入る</button>
   <p class="error" id="pw-err"></p>
 </div>
 
 <div id="admin-app" style="display:none;">
+  <p class="muted" id="current-day-label"></p>
+
+  <div class="muted" style="margin:10px 0;">表示するデータ(必ず1つだけ選択)</div>
+  <div id="app-load-mode" style="margin-bottom:10px;">
+    <label><input type="checkbox" class="load-mode-cb" data-mode="none" id="app-load-none"> load_none</label>
+    <label><input type="checkbox" class="load-mode-cb" data-mode="today" id="app-load-today"> load_today</label>
+    <label><input type="checkbox" class="load-mode-cb" data-mode="yesterday" id="app-load-yesterday"> load_yesterday</label>
+  </div>
+
   <div class="card" id="revenue-summary" style="font-size:1.2rem;"></div>
 
-  <h2>今日の注文履歴</h2>
+  <h2>注文履歴</h2>
   <table>
-    <thead><tr><th>#</th><th>時刻</th><th>普通</th><th>辛味</th><th>金額</th><th>状態</th></tr></thead>
+    <thead><tr><th>日</th><th>#</th><th>時刻</th><th>普通</th><th>辛味</th><th>金額</th><th>状態</th></tr></thead>
     <tbody id="history-body"></tbody>
   </table>
   <div id="pager"></div>
 
   <hr style="margin:24px 0;">
-  <h2>リセット</h2>
-  <p class="muted">今日のリストをCSVでエクスポートしてから、全データをクリアします。本番開始前・翌日への切り替え前に実行してください。</p>
-  <button class="btn btn-danger" id="reset-btn">CSVエクスポート → リセット</button>
+  <h2>次の日へ進める</h2>
+  <p class="muted">注文番号を1からリセットして、翌日の受付を開始します。<b>これまでのデータは消えません</b>。営業終了後・翌日の受付開始前に押してください。</p>
+  <button class="btn" id="nextday-btn">次の日へ進める(番号だけリセット)</button>
+
+  <hr style="margin:24px 0;">
+  <h2>指定日のデータ削除(デバッグ用)</h2>
+  <p class="muted">動作確認で作ったテスト注文だけを消したいときに使います。選んだ日の注文履歴・進行中の注文がすべて削除されます(<b>CSVには出力されません</b>)。選んだ日が現在受付中の日の場合、注文番号も1にリセットされます。</p>
+  <label>削除する日
+    <select id="delete-day-select"></select>
+  </label>
+  <button class="btn btn-danger" id="delete-day-btn">選択した日のデータを削除</button>
+
+  <hr style="margin:24px 0;">
+  <h2>最終リセット(保険)</h2>
+  <p class="muted">全日程が終わったあとの保険用です。これまでの全データ(全日程分)をCSVでエクスポートしてから、完全にクリアします(注文番号・日数カウントも1に戻ります)。</p>
+  <button class="btn btn-danger" id="reset-btn">CSVエクスポート → 完全リセット</button>
 </div>
 
 <script type="module">
-import { getApp_, getDb, getHistoryOnce, resetAll, PRICE_PER_MEAL } from "./Db.js";
+import {
+  getApp_, getDb, getDayHistoryOnce, getHistoryOnce, resetAll, getActiveOrdersCountOnce,
+  getCurrentDayOnce, startNewDay, deleteDayData, withTimeout, PRICE_PER_MEAL
+} from "./Db.js";
 import { requireAuth } from "./Auth.js";
 import { checkAdminPassword } from "./AdminAuth.js";
 
 const app = getApp_();
 const db = getDb();
 
-let history = [];
+let currentDay = 1;
+let mode = "none"; // "none" | "today" | "yesterday" ※load_allは用意しない
+let displayedHistory = [];
+let displayedDayLabel = null; // 実際に表示している日番号(nullなら未選択)
 let page = 0;
 const PAGE_SIZE = 20;
 
@@ -50,6 +86,30 @@ requireAuth(app, {
   onReady: () => {
     document.getElementById("pw-gate").style.display = "flex";
   }
+});
+
+// ---- load_none/today/yesterday の排他チェックボックス ----
+const modeCheckboxes = Array.from(document.querySelectorAll(".load-mode-cb"));
+
+function syncModeCheckboxes() {
+  modeCheckboxes.forEach((cb) => { cb.checked = (cb.dataset.mode === mode); });
+}
+syncModeCheckboxes(); // 初期状態: load_none
+
+modeCheckboxes.forEach((cb) => {
+  cb.addEventListener("change", () => {
+    if (cb.checked) {
+      mode = cb.dataset.mode;
+      syncModeCheckboxes();
+      // adminに入った後(パスワード認証済み)なら、選び直した瞬間に読み込み直す
+      if (document.getElementById("admin-app").style.display !== "none") {
+        loadForMode();
+      }
+    } else {
+      // 必ず1つは選択された状態を保つ(外そうとしても戻す)
+      cb.checked = true;
+    }
+  });
 });
 
 document.getElementById("pw-submit").onclick = checkPassword;
@@ -63,51 +123,94 @@ async function checkPassword() {
   if (ok) {
     document.getElementById("pw-gate").style.display = "none";
     document.getElementById("admin-app").style.display = "block";
-    await loadHistory();
+    try {
+      currentDay = await withTimeout(getCurrentDayOnce(db));
+    } catch (e) {
+      currentDay = 1;
+    }
+    document.getElementById("current-day-label").textContent = `現在: ${currentDay}日目を受付中`;
+    renderDeleteDaySelect();
+    await loadForMode(); // ログイン前に選んでいたモード(デフォルトはload_none)で読み込む
   } else {
     document.getElementById("pw-err").textContent = "パスワードが違います";
   }
-}
-
-async function loadHistory() {
-  history = await getHistoryOnce(db);
-  page = 0;
-  renderSummary();
-  renderPage();
 }
 
 function itemCount(h) {
   return (h.normal || 0) + (h.spicy || 0);
 }
 
+// ---- 選択中モードに応じたデータ読み込み(load_noneなら一切読み取りしない) ----
+async function loadForMode() {
+  page = 0;
+
+  if (mode === "none") {
+    displayedHistory = [];
+    displayedDayLabel = null;
+    renderSummary();
+    renderPage();
+    return;
+  }
+
+  const targetDay = (mode === "today") ? currentDay : currentDay - 1;
+
+  if (targetDay < 1) {
+    // 1日目にload_yesterdayを選んだ場合など、そもそも存在しない日
+    displayedHistory = [];
+    displayedDayLabel = targetDay;
+    renderSummary();
+    renderPage();
+    return;
+  }
+
+  try {
+    displayedHistory = await withTimeout(getDayHistoryOnce(db, targetDay));
+    displayedDayLabel = targetDay;
+  } catch (e) {
+    alert("エラー: " + e.message);
+    displayedHistory = [];
+    displayedDayLabel = null;
+  }
+  renderSummary();
+  renderPage();
+}
+
 function renderSummary() {
-  // canceled: true の注文は売上から除外する(取消による変動を反映)
-  const validOrders = history.filter((h) => !h.canceled);
-  const canceledOrders = history.filter((h) => h.canceled);
+  const summaryEl = document.getElementById("revenue-summary");
+
+  if (mode === "none") {
+    summaryEl.innerHTML = `<span class="muted">load_today または load_yesterday を選ぶとデータを表示します</span>`;
+    return;
+  }
+  if (displayedDayLabel === null || displayedDayLabel < 1) {
+    summaryEl.innerHTML = `<span class="muted">${mode === "yesterday" ? "前日のデータはまだありません(現在1日目です)" : "データがありません"}</span>`;
+    return;
+  }
+
+  const validOrders = displayedHistory.filter((h) => !h.canceled);
+  const canceledOrders = displayedHistory.filter((h) => h.canceled);
   const totalItems = validOrders.reduce((sum, h) => sum + itemCount(h), 0);
   const revenue = totalItems * PRICE_PER_MEAL;
-  const canceledCount = canceledOrders.length;
 
-  document.getElementById("revenue-summary").innerHTML = `
+  summaryEl.innerHTML = `
+    <div>${displayedDayLabel}日目${displayedDayLabel === currentDay ? "(受付中)" : ""}の売上</div>
     <div><b>売上合計: ${revenue.toLocaleString()}円</b>(${totalItems}食 / 有効注文${validOrders.length}件)</div>
-    <div class="muted">取消: ${canceledCount}件 (売上には含まれません)</div>
+    <div class="muted">取消: ${canceledOrders.length}件 (売上には含まれません)</div>
   `;
 }
 
 function renderPage() {
   const start = page * PAGE_SIZE;
-  const rows = history.slice(start, start + PAGE_SIZE);
+  const rows = displayedHistory.slice(start, start + PAGE_SIZE);
   document.getElementById("history-body").innerHTML = rows.map((h) => {
     const t = h.createdAt ? new Date(h.createdAt.toMillis()).toLocaleTimeString("ja-JP", { hour: "2-digit", minute: "2-digit" }) : "-";
     const price = itemCount(h) * PRICE_PER_MEAL;
-    const statusHtml = h.canceled
-      ? `<span class="error">取消</span>`
-      : `<span class="muted">有効</span>`;
+    const statusHtml = h.canceled ? `<span class="error">取消</span>` : `<span class="muted">有効</span>`;
     const rowStyle = h.canceled ? ` style="text-decoration:line-through;color:#999;"` : "";
-    return `<tr${rowStyle}><td>${h.historyId}</td><td>${t}</td><td>${h.normal || 0}</td><td>${h.spicy || 0}</td><td>${price.toLocaleString()}円</td><td>${statusHtml}</td></tr>`;
+    return `<tr${rowStyle}><td>${h.day || 1}</td><td>${h.historyId}</td><td>${t}</td><td>${h.normal || 0}</td><td>${h.spicy || 0}</td><td>${price.toLocaleString()}円</td><td>${statusHtml}</td></tr>`;
   }).join("");
 
-  const totalPages = Math.max(1, Math.ceil(history.length / PAGE_SIZE));
+  const totalPages = Math.max(1, Math.ceil(displayedHistory.length / PAGE_SIZE));
   const pager = document.getElementById("pager");
   pager.innerHTML = "";
   const prevBtn = document.createElement("button");
@@ -118,7 +221,7 @@ function renderPage() {
 
   const label = document.createElement("span");
   label.className = "muted";
-  label.textContent = ` ${page + 1} / ${totalPages} ページ (計${history.length}件) `;
+  label.textContent = ` ${page + 1} / ${totalPages} ページ (計${displayedHistory.length}件) `;
 
   const nextBtn = document.createElement("button");
   nextBtn.className = "btn-sm";
@@ -129,26 +232,142 @@ function renderPage() {
   pager.append(prevBtn, label, nextBtn);
 }
 
+function renderDeleteDaySelect() {
+  const sel = document.getElementById("delete-day-select");
+  const prevValue = sel.value;
+  const options = [];
+  for (let d = 1; d <= currentDay; d++) options.push(d);
+  sel.innerHTML = options.map((d) => `<option value="${d}">${d}日目${d === currentDay ? "(受付中)" : ""}</option>`).join("");
+  if (options.includes(Number(prevValue))) sel.value = prevValue;
+}
+
 function toCsv(list) {
-  const header = "historyId,queueNumber,normal,spicy,price,canceled,createdAt\n";
+  const header = "day,historyId,queueNumber,normal,spicy,price,canceled,createdAt\n";
   const rows = list.map((h) => {
     const t = h.createdAt ? new Date(h.createdAt.toMillis()).toISOString() : "";
     const price = h.canceled ? 0 : itemCount(h) * PRICE_PER_MEAL;
-    return [h.historyId, h.queueNumber, h.normal || 0, h.spicy || 0, price, h.canceled ? "canceled" : "", t].join(",");
+    return [h.day || 1, h.historyId, h.queueNumber, h.normal || 0, h.spicy || 0, price, h.canceled ? "canceled" : "", t].join(",");
   });
   const validOrders = list.filter((h) => !h.canceled);
   const totalRevenue = validOrders.reduce((sum, h) => sum + itemCount(h) * PRICE_PER_MEAL, 0);
-  const footer = `\n合計売上,,,,${totalRevenue},,`;
+  const footer = `\n合計売上,,,,,${totalRevenue},,`;
   return header + rows.join("\n") + footer;
 }
 
-document.getElementById("reset-btn").onclick = async () => {
-  if (!confirm("本当にリセットしますか?この操作は取り消せません。")) return;
-  const btn = document.getElementById("reset-btn");
+// ---- 次の日へ進める(番号だけリセット、データは消さない) ----
+document.getElementById("nextday-btn").onclick = async () => {
+  if (!navigator.onLine) {
+    alert("オフラインのようです。通信状態を確認してください。");
+    return;
+  }
+  const btn = document.getElementById("nextday-btn");
   btn.disabled = true;
+  let activeCount = 0;
+  try {
+    activeCount = await withTimeout(getActiveOrdersCountOnce(db));
+  } catch (e) {
+    alert("エラー: " + e.message);
+    btn.disabled = false;
+    return;
+  }
+
+  const msg = activeCount > 0
+    ? `まだ受け渡しが完了していない注文が${activeCount}件あります。\nこのまま次の日へ進めると、その注文は番号が失われます(履歴データ自体は残ります)。\n本当に次の日へ進めますか?`
+    : "注文番号を1からリセットして、次の日の受付を開始します。よろしいですか?";
+  if (!confirm(msg)) {
+    btn.disabled = false;
+    return;
+  }
+
+  try {
+    const prevDay = currentDay;
+    const nextDay = await withTimeout(startNewDay(db));
+    currentDay = nextDay;
+    document.getElementById("current-day-label").textContent = `現在: ${currentDay}日目を受付中`;
+    renderDeleteDaySelect();
+    await loadForMode(); // 選択中のモードのまま、新しい日の文脈で表示し直す
+
+    // 前日のデータが消えていないことを目視確認できるよう件数を表示(この日だけの読み取り)
+    const prevDayRecords = await withTimeout(getDayHistoryOnce(db, prevDay));
+    alert(`${nextDay}日目の受付を開始しました。番号は1からです。\n\n(確認: ${prevDay}日目のデータは${prevDayRecords.length}件、削除されずそのまま残っています)`);
+  } catch (e) {
+    alert("エラー: " + e.message);
+  } finally {
+    btn.disabled = false;
+  }
+};
+
+// ---- 指定した日のデータだけ削除(デバッグ用) ----
+document.getElementById("delete-day-btn").onclick = async () => {
+  if (!navigator.onLine) {
+    alert("オフラインのようです。通信状態を確認してください。");
+    return;
+  }
+  const day = Number(document.getElementById("delete-day-select").value);
+  const btn = document.getElementById("delete-day-btn");
+  btn.disabled = true;
+
+  let targetCount = 0;
+  try {
+    targetCount = (await withTimeout(getDayHistoryOnce(db, day))).length;
+  } catch (e) {
+    alert("エラー: " + e.message);
+    btn.disabled = false;
+    return;
+  }
+
+  const isCurrent = day === currentDay;
+  const msg = `${day}日目のデータ(履歴${targetCount}件${isCurrent ? "、進行中の注文も含む" : ""})を完全に削除します。\nCSVには保存されません。この操作は取り消せません。\n本当によろしいですか?`;
+  if (!confirm(msg)) {
+    btn.disabled = false;
+    return;
+  }
+
   btn.textContent = "処理中...";
   try {
-    const exported = await resetAll(db);
+    const result = await withTimeout(deleteDayData(db, day));
+    renderDeleteDaySelect();
+    if (displayedDayLabel === day) await loadForMode(); // 今見ていた日を消した場合は表示も更新
+    alert(`${day}日目のデータを削除しました(履歴${result.deletedHistory}件、進行中${result.deletedActive}件)`);
+  } catch (e) {
+    alert("エラー: " + e.message);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = "選択した日のデータを削除";
+  }
+};
+
+// ---- 最終リセット(保険。全データCSV出力→完全クリア。ここだけは全件取得する) ----
+document.getElementById("reset-btn").onclick = async () => {
+  if (!navigator.onLine) {
+    alert("オフラインのようです。通信状態を確認してください。");
+    return;
+  }
+  const btn = document.getElementById("reset-btn");
+  btn.disabled = true;
+  btn.textContent = "確認中...";
+  let activeCount = 0;
+  try {
+    activeCount = await withTimeout(getActiveOrdersCountOnce(db));
+  } catch (e) {
+    alert("エラー: " + e.message);
+    btn.disabled = false;
+    btn.textContent = "CSVエクスポート → 完全リセット";
+    return;
+  }
+
+  const confirmMsg = activeCount > 0
+    ? `まだ受け渡しが完了していない注文が${activeCount}件あります。\nこのままリセットすると、その注文情報もすべて削除されます。\n本当にリセットしますか?この操作は取り消せません。`
+    : "本当に全データをリセットしますか?この操作は取り消せません。(全日程分のCSVは自動で保存されます)";
+  if (!confirm(confirmMsg)) {
+    btn.disabled = false;
+    btn.textContent = "CSVエクスポート → 完全リセット";
+    return;
+  }
+
+  btn.textContent = "処理中...";
+  try {
+    const exported = await withTimeout(resetAll(db), 15000);
     const csv = toCsv(exported.sort((a, b) => a.historyId - b.historyId));
     const blob = new Blob(["\uFEFF" + csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
@@ -158,13 +377,19 @@ document.getElementById("reset-btn").onclick = async () => {
     a.download = `order-history-${dateStr}.csv`;
     a.click();
     URL.revokeObjectURL(url);
-    await loadHistory();
-    alert("CSVを出力し、データをリセットしました。");
+
+    currentDay = 1;
+    document.getElementById("current-day-label").textContent = `現在: ${currentDay}日目を受付中`;
+    renderDeleteDaySelect();
+    mode = "none";
+    syncModeCheckboxes();
+    await loadForMode();
+    alert("CSVを出力し、全データをリセットしました。");
   } catch (e) {
     alert("エラー: " + e.message);
   } finally {
     btn.disabled = false;
-    btn.textContent = "CSVエクスポート → リセット";
+    btn.textContent = "CSVエクスポート → 完全リセット";
   }
 };
 </script>
