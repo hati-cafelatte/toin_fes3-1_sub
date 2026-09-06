@@ -14,7 +14,7 @@
 <p class="muted" id="empty-msg" style="display:none;">現在、注文はありません</p>
 
 <script type="module">
-import { getApp_, getDb, watchActiveOrders, completeOrder } from "./Db.js";
+import { getApp_, getDb, watchActiveOrders, completeOrder, withTimeout } from "./Db.js";
 import { requireAuth } from "./Auth.js";
 
 const app = getApp_();
@@ -39,10 +39,17 @@ watchActiveOrders(db, (orders) => {
 
   listEl.querySelectorAll("button[data-id]").forEach((btn) => {
     btn.onclick = async () => {
+      if (!navigator.onLine) {
+        alert("オフラインのようです。通信状態を確認してください。");
+        return;
+      }
       btn.disabled = true;
       btn.textContent = "処理中...";
       try {
-        await completeOrder(db, btn.dataset.id, Number(btn.dataset.num));
+        const ok = await withTimeout(completeOrder(db, btn.dataset.id, Number(btn.dataset.num)));
+        if (!ok) {
+          alert("この注文はすでに他の端末で処理済みです。");
+        }
       } catch (e) {
         alert("エラー: " + e.message);
         btn.disabled = false;
