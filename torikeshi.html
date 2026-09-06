@@ -24,7 +24,7 @@
 </div>
 
 <script type="module">
-import { getApp_, getDb, watchActiveOrders, cancelOrder } from "./Db.js";
+import { getApp_, getDb, watchActiveOrders, cancelOrder, withTimeout } from "./Db.js";
 import { requireAuth } from "./Auth.js";
 
 const app = getApp_();
@@ -66,11 +66,18 @@ document.getElementById("confirm-no-btn").onclick = () => {
 
 document.getElementById("confirm-yes-btn").onclick = async () => {
   if (!target) return;
+  if (!navigator.onLine) {
+    alert("オフラインのようです。通信状態を確認してください。");
+    return;
+  }
   const btn = document.getElementById("confirm-yes-btn");
   btn.disabled = true;
   try {
-    await cancelOrder(db, target.id, target.queueNumber, target.historyDocId);
+    const ok = await withTimeout(cancelOrder(db, target.id, target.queueNumber, target.historyDocId));
     document.getElementById("confirm-modal").style.display = "none";
+    if (!ok) {
+      alert("この注文はすでに他の端末で処理済みです。");
+    }
   } catch (e) {
     alert("エラー: " + e.message);
   } finally {
