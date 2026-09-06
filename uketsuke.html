@@ -40,19 +40,25 @@
 <div class="overlay" id="done-modal" style="display:none;">
   <h2>注文番号</h2>
   <p style="font-size:4rem;font-weight:bold;" id="done-number"></p>
+  <p id="done-daycount"></p>
   <button class="btn" id="done-ok-btn">次の注文へ</button>
 </div>
 
 <script type="module">
-import { getApp_, getDb, watchSettings, createOrder, PRICE_PER_MEAL } from "./Db.js";
+import {
+  getApp_, getDb, watchSettings, createOrder, withTimeout,
+  watchCurrentDay, getDayItemCount, PRICE_PER_MEAL, DAY_RED_THRESHOLD
+} from "./Db.js";
 import { requireAuth } from "./Auth.js";
 
 const app = getApp_();
 const db = getDb();
 let settings = null;
 let normal = 0, spicy = 0;
+let currentDay = 1;
 
 watchSettings(db, (s) => { settings = s; });
+watchCurrentDay(db, (d) => { currentDay = d; });
 
 requireAuth(app, { onReady: () => { document.getElementById("app").style.display = "block"; } });
 
@@ -70,7 +76,7 @@ render();
 document.getElementById("submit-btn").onclick = () => {
   const total = (normal + spicy) * PRICE_PER_MEAL;
   document.getElementById("confirm-detail").innerHTML =
-    `普通 ${normal}個 / 辛味 ${spicy}個<br><span style="font-size:1.6rem;">${total.toLocaleString()}円</span>`;
+    `普通 ${normal}個 / 辛味 ${spicy}個<br><span style="font-size:1.6rem;font-weight:bold;">${total.toLocaleString()}円</span>`;
   document.getElementById("confirm-modal").style.display = "flex";
 };
 document.getElementById("confirm-no-btn").onclick = () => {
@@ -80,12 +86,33 @@ document.getElementById("confirm-yes-btn").onclick = async () => {
   const btn = document.getElementById("confirm-yes-btn");
   btn.disabled = true;
   document.getElementById("err").textContent = "";
+  if (!navigator.onLine) {
+    document.getElementById("err").textContent = "オフラインのようです。通信状態を確認してください。";
+    btn.disabled = false;
+    return;
+  }
   try {
     const maxOrderNumber = settings ? settings.maxOrderNumber : 30;
-    const num = await createOrder(db, { normal, spicy }, maxOrderNumber);
+    const num = await withTimeout(createOrder(db, { normal, spicy }, maxOrderNumber));
     document.getElementById("confirm-modal").style.display = "none";
     document.getElementById("done-number").textContent = num;
     document.getElementById("done-modal").style.display = "flex";
+
+    // 本日の累計食数(取消は含まない、今回の注文も含む)を取得して表示。
+    // 失敗しても注文自体は成功しているので、静かに諦めるだけにする。
+    const daycountEl = document.getElementById("done-daycount");
+    daycountEl.textContent = "";
+    try {
+      const dayCount = await withTimeout(getDayItemCount(db, currentDay), 5000);
+      daycountEl.textContent = `本日 ${dayCount}食目`;
+      if (dayCount >= DAY_RED_THRESHOLD) {
+        daycountEl.style.color = "#c00";
+      } else {
+        daycountEl.style.color = "";
+      }
+    } catch (e) {
+      // 累計食数の表示だけ失敗。注文自体は成功済みなのでエラー表示はしない。
+    }
   } catch (e) {
     document.getElementById("confirm-modal").style.display = "none";
     document.getElementById("err").textContent = e.message;
